@@ -1,0 +1,11 @@
+services:
+  backend:
+    container_name: insurpay_backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

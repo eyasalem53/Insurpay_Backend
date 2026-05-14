@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database.session import engine
-from app.database.models import Base
+
+from app.database.sync_db import sync_database
 from app.auth.routes import router as auth_router
 from app.users.routes import router as users_router
 from app.agent.router import router as agent_router
-Base.metadata.create_all(bind=engine)
+
+sync_database()
 
 app = FastAPI(
     title="InsurPay Analytics Platform API",
@@ -22,9 +23,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 app.include_router(agent_router)
 app.include_router(auth_router)
 app.include_router(users_router)
+
 
 @app.get("/")
 def root():
