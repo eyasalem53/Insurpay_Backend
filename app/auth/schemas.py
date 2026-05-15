@@ -1,10 +1,17 @@
 from pydantic import BaseModel, EmailStr
-
+from datetime import date
+from pydantic import BaseModel, EmailStr
+from typing import Optional
 
 class RegisterRequest(BaseModel):
     full_name: str
     email: EmailStr
     password: str
+
+    date_naissance: Optional[date] = None
+    phone_number: Optional[str] = None
+    num_adherent: Optional[str] = None
+    address: Optional[str] = None
 
 
 class LoginRequest(BaseModel):

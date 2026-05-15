@@ -3,13 +3,17 @@ from app.database.session import engine
 from app.database.models import Base
 
 
+from sqlalchemy import inspect, text
+from app.database.session import engine
+from app.database.models import Base
+
+
 def sync_database():
     # Create missing tables
     Base.metadata.create_all(bind=engine)
 
     inspector = inspect(engine)
 
-    # Add missing columns manually
     existing_user_columns = [
         column["name"] for column in inspector.get_columns("users")
     ]
@@ -31,6 +35,46 @@ def sync_database():
                     """
                     ALTER TABLE users
                     ADD COLUMN is_active BOOLEAN DEFAULT TRUE
+                    """
+                )
+            )
+
+        if "date_naissance" not in existing_user_columns:
+            connection.execute(
+                text(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN date_naissance DATE
+                    """
+                )
+            )
+
+        if "phone_number" not in existing_user_columns:
+            connection.execute(
+                text(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN phone_number VARCHAR(30)
+                    """
+                )
+            )
+
+        if "num_adherent" not in existing_user_columns:
+            connection.execute(
+                text(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN num_adherent VARCHAR(100)
+                    """
+                )
+            )
+
+        if "address" not in existing_user_columns:
+            connection.execute(
+                text(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN address TEXT
                     """
                 )
             )

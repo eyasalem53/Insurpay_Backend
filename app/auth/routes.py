@@ -20,8 +20,12 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
             "id": user.id,
             "full_name": user.full_name,
             "email": user.email,
-            "role": user.role.name if user.role else None
-        }
+            "date_naissance": user.date_naissance,
+            "phone_number": user.phone_number,
+            "num_adherent": user.num_adherent,
+            "address": user.address,
+            "role": user.role.name if user.role else None,
+        },
     }
 
 

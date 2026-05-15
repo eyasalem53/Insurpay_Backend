@@ -6,7 +6,8 @@ from datetime import date, datetime
 from typing import Any
 import os
 import re
-
+import requests
+import json
 
 router = APIRouter(prefix="/agent", tags=["Agent LLM"])
 
@@ -29,7 +30,12 @@ def get_database_url() -> str:
 
 def get_engine() -> Engine:
     return create_engine(get_database_url())
+def get_ollama_base_url() -> str:
+    return os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 
+
+def get_ollama_model() -> str:
+    return os.getenv("OLLAMA_MODEL", "qwen3:14b")
 
 def normalize_text(value: str | None) -> str:
     if not value:
@@ -243,11 +249,14 @@ def fetch_contract_anomalies(numero_contrat: str) -> list[dict]:
             MIN(d.date_complete) AS premiere_detection,
             MAX(d.date_complete) AS derniere_detection
         FROM public.fact_anomalie_prelevement AS f
+        LEFT JOIN public.dim_contrat AS c
+            ON c.id_contrat = f.id_contrat
         LEFT JOIN public.dim_type_anomalie AS ta
             ON ta.id_type_anomalie = f.id_type_anomalie
         LEFT JOIN public.dim_date AS d
             ON d.id_date = f.id_date
         WHERE CAST(f.id_contrat AS TEXT) = :numero_contrat
+           OR CAST(c.numero_contrat AS TEXT) = :numero_contrat
         GROUP BY
             f.id_type_anomalie,
             ta.nom_anomalie,
@@ -302,7 +311,6 @@ def fetch_contract_anomalies(numero_contrat: str) -> list[dict]:
         )
 
     return anomalies
-
 
 def calculate_decision(anomalies: list[dict]) -> str:
     if not anomalies:
@@ -454,7 +462,150 @@ def build_recommendation(decision: str, anomalies: list[dict]) -> str:
 
     return prefix + "; ".join(actions) + "."
 
+def build_llm_prompt(
+    numero_contrat: str,
+    contract_info: dict,
+    anomalies: list[dict],
+    decision: str,
+) -> str:
+    safe_payload = {
+        "numero_contrat": numero_contrat,
+        "decision_automatique": decision,
+        "contrat": contract_info,
+        "anomalies": anomalies,
+    }
 
+    return f"""
+Tu es un assistant décisionnel professionnel intégré à une plateforme BI nommée InsurPay Analytics.
+
+Contexte métier:
+La plateforme analyse les anomalies de prélèvement avant exécution du prélèvement bancaire.
+Les anomalies proviennent du Data Warehouse et ne doivent jamais être inventées.
+
+Données disponibles au format JSON:
+{json.dumps(safe_payload, ensure_ascii=False, indent=2)}
+
+Ta mission:
+Générer une réponse claire, professionnelle et courte en français.
+
+Règles strictes:
+- Ne modifie jamais la décision automatique.
+- Ne crée jamais de nouvelle anomalie.
+- N'invente jamais de date, montant, statut ou information absente.
+- Si une information est absente, écris "Non renseigné".
+- La décision doit rester exactement: {decision}
+- Ne parle pas comme un chatbot généraliste.
+- Ne montre jamais ton raisonnement interne.
+- Réponds comme un assistant décisionnel métier.
+
+Format obligatoire de réponse:
+
+Résumé du contrat:
+...
+
+Analyse des anomalies:
+...
+
+Justification de la décision:
+...
+
+Recommandation métier:
+...
+
+Niveau de priorité:
+...
+""".strip()
+
+
+def generate_llm_analysis(
+    numero_contrat: str,
+    contract_info: dict,
+    anomalies: list[dict],
+    decision: str,
+) -> dict:
+    prompt = build_llm_prompt(
+        numero_contrat=numero_contrat,
+        contract_info=contract_info,
+        anomalies=anomalies,
+        decision=decision,
+    )
+
+    url = f"{get_ollama_base_url()}/api/generate"
+
+    payload = {
+        "model": get_ollama_model(),
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "num_ctx": 4096,
+            "num_predict": 700,
+        },
+    }
+
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=(10, 300),  # 10s connection timeout, 300s generation timeout
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+        llm_response = data.get("response", "").strip()
+
+        # Qwen3 can sometimes return internal thinking tags.
+        # This removes them if they appear.
+        llm_response = re.sub(
+            r"<think>.*?</think>",
+            "",
+            llm_response,
+            flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
+
+        if not llm_response:
+            raise ValueError("Réponse vide retournée par Ollama.")
+
+        return {
+            "llm_enabled": True,
+            "model": get_ollama_model(),
+            "analysis": llm_response,
+            "error": "",
+        }
+
+    except requests.exceptions.Timeout:
+        return {
+            "llm_enabled": False,
+            "model": get_ollama_model(),
+            "analysis": "",
+            "error": "Ollama a dépassé le délai de réponse. Le modèle est peut-être encore en chargement ou trop lent.",
+        }
+
+    except requests.exceptions.ConnectionError:
+        return {
+            "llm_enabled": False,
+            "model": get_ollama_model(),
+            "analysis": "",
+            "error": "Connexion impossible à Ollama. Vérifiez OLLAMA_BASE_URL, le port 11434 et le firewall du serveur.",
+        }
+
+    except requests.exceptions.HTTPError as error:
+        return {
+            "llm_enabled": False,
+            "model": get_ollama_model(),
+            "analysis": "",
+            "error": f"Erreur HTTP Ollama : {str(error)}",
+        }
+
+    except Exception as error:
+        return {
+            "llm_enabled": False,
+            "model": get_ollama_model(),
+            "analysis": "",
+            "error": f"Ollama indisponible ou erreur de génération : {str(error)}",
+        }
 @router.post("/analyze-contract")
 def analyze_contract(payload: AgentRequest):
     question = payload.question.strip()
@@ -470,6 +621,9 @@ def analyze_contract(payload: AgentRequest):
             "anomalies": [],
             "explication": "",
             "recommandation": "Veuillez saisir un numéro de contrat valide.",
+            "llm_enabled": False,
+            "llm_model": get_ollama_model(),
+            "llm_analysis": "",
         }
 
     numero_contrat = match.group(0)
@@ -477,8 +631,16 @@ def analyze_contract(payload: AgentRequest):
     contract_info = fetch_contract_info(numero_contrat)
     anomalies = fetch_contract_anomalies(numero_contrat)
     decision = calculate_decision(anomalies)
-    explication = build_explanation(numero_contrat, decision, anomalies)
-    recommandation = build_recommendation(decision, anomalies)
+
+    fallback_explication = build_explanation(numero_contrat, decision, anomalies)
+    fallback_recommandation = build_recommendation(decision, anomalies)
+
+    llm_result = generate_llm_analysis(
+        numero_contrat=numero_contrat,
+        contract_info=contract_info,
+        anomalies=anomalies,
+        decision=decision,
+    )
 
     return {
         "success": True,
@@ -486,6 +648,14 @@ def analyze_contract(payload: AgentRequest):
         "contrat": contract_info,
         "decision": decision,
         "anomalies": anomalies,
-        "explication": explication,
-        "recommandation": recommandation,
+
+        # Old fields kept for frontend compatibility
+        "explication": fallback_explication,
+        "recommandation": fallback_recommandation,
+
+        # New Ollama fields
+        "llm_enabled": llm_result.get("llm_enabled", False),
+        "llm_model": llm_result.get("model", get_ollama_model()),
+        "llm_analysis": llm_result.get("analysis", ""),
+        "llm_error": llm_result.get("error", ""),
     }

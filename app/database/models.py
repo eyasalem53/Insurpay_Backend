@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, T
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database.session import Base
-
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, ForeignKey, Text, UniqueConstraint
 
 class Role(Base):
     __tablename__ = "roles"
@@ -13,7 +13,6 @@ class Role(Base):
     users = relationship("User", back_populates="role")
     permissions = relationship("DashboardPermission", back_populates="role")
 
-
 class User(Base):
     __tablename__ = "users"
 
@@ -21,10 +20,18 @@ class User(Base):
     full_name = Column(String(150), nullable=False)
     email = Column(String(150), unique=True, nullable=False, index=True)
     hashed_password = Column(Text, nullable=False)
+
+    # New profile fields
+    date_naissance = Column(DateTime(timezone=False), nullable=True)
+    phone_number = Column(String(30), nullable=True)
+    num_adherent = Column(String(100), nullable=True)
+    address = Column(Text, nullable=True)
+
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     account_status = Column(String(30), default="PENDING", nullable=False)
+
     role = relationship("Role", back_populates="users")
 
 

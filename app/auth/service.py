@@ -27,6 +27,13 @@ def register_user(db: Session, payload: RegisterRequest):
         full_name=payload.full_name,
         email=payload.email,
         hashed_password=hash_password(payload.password),
+
+        # New profile fields
+        date_naissance=payload.date_naissance,
+        phone_number=payload.phone_number,
+        num_adherent=payload.num_adherent,
+        address=payload.address,
+
         role_id=default_role.id,
         is_active=False,
         account_status="PENDING",
